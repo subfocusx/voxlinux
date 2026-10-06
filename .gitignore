@@ -1,0 +1,5 @@
+upstream/
+voxlinux/.venv/
+voxlinux/__pycache__/
+*.wav
+__pycache__/

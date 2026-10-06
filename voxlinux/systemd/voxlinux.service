@@ -1,0 +1,30 @@
+[Unit]
+Description=Vox voice dictation (Wayland/Hyprland)
+Documentation=https://github.com/privatekey7/Vox
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/voxlinux
+Restart=on-failure
+RestartSec=3
+
+# The dictation loop needs to reach the user's microphone through the
+# PipeWire/PulseAudio socket, which systemd user units already get via
+# XDG_RUNTIME_DIR. No `input` group membership is required: the hotkey comes
+# from the Hyprland binds (hyprland-bind.lua), which talk to this daemon over
+# $XDG_RUNTIME_DIR/voxlinux.sock.
+AudioDeviceName=
+
+Environment=PYTHONUNBUFFERED=1
+Environment=XDG_RUNTIME_DIR=%t
+# Model, cache and logs live under the XDG dirs, so no path juggling is needed.
+
+# `wtype` inserts the recognised text. Without a compositor session
+# (WAYLAND_DISPLAY / HYPRLAND_INSTANCE_SIGNATURE) insertion cannot work; the
+# daemon still starts and transcribes, and logs a notification about it.
+PassEnvironment=WAYLAND_DISPLAY HYPRLAND_INSTANCE_SIGNATURE DISPLAY
+
+[Install]
+WantedBy=graphical-session.target

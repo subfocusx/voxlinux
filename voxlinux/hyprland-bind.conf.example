@@ -1,0 +1,108 @@
+# Vox — Hyprland hotkey bindings
+#
+# Hyprland never records audio itself. The daemon (systemd user service
+# voxlinux.service) owns the microphone and listens on a control socket at
+# $XDG_RUNTIME_DIR/voxlinux.sock; the binds just send it `start` / `stop`.
+#
+# The ready-to-use fragment for this machine (Hyprland 0.56, Lua config,
+# Omarchy) is hyprland-bind.lua — copy it to ~/.config/hypr/ and
+# `require("vox-bindings")` it from ~/.config/hypr/bindings.lua.
+#
+# Everything below is reference for other setups.
+#
+#   1. NO CONFIG AT ALL (only with /dev/input access). Vox watches KEY_RCTRL
+#      on the keyboard itself and needs no binds:
+#          sudo usermod -aG input $USER      # then re-login
+#
+#   2. BINDS (fallback, and what hyprland-bind.lua uses). Below.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# Push-to-talk needs press *and* release
+# ─────────────────────────────────────────────────────────────────────────────
+# A plain bind fires on press. Adding the `R` flag fires it on release
+# instead, so the two together behave like a real push-to-talk:
+#
+#     held      → start recording
+#     released  → stop, transcribe, insert at the cursor
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# Option A — Lua config (Hyprland 0.56+, Omarchy)
+# ─────────────────────────────────────────────────────────────────────────────
+# In ~/.config/hypr/bindings.lua. Verified against `o.bind` on this setup:
+#
+#     o.bind("Right",             "Vox: start recording", "vox-ptt start")
+#     o.bind("Right",             "Vox: stop",           "vox-ptt stop",
+#                                { release = true })
+#     hl.unbind("SUPER + SHIFT + D")
+#     o.bind("SUPER + SHIFT + D", "Vox: toggle",         "vox-ptt toggle")
+#
+# Two key-string rules learned on 0.56: the key is an X keysym — `Right` is
+# right Ctrl (`RCTRL`/`RCTRC` are not keysyms and are rejected) — and every
+# modifier needs its own "+": "SUPER SHIFT + D" fails as an unknown keysym.
+#
+# If `o.bind` cannot express the release direction for your key, use the
+# `hold` command instead: it starts when the key is down and stops by itself
+# once Hyprland reports the key released.
+#
+#     o.bind("Right", "Vox: push-to-talk", "vox-ptt hold Right")
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# Option B — legacy .conf syntax
+# ─────────────────────────────────────────────────────────────────────────────
+# For Hyprland builds that still parse `bind =` lines. Note that recent
+# Hyprland (0.56) refuses `bind` lines when running the Lua config parser, so
+# check whether your setup accepts them before relying on this block.
+#
+# Press and release:
+#
+#     bind  = Right, exec, vox-ptt start
+#     bind  = Right, R,   exec, vox-ptt stop
+#
+# Locked variant — grabs the key while it is held, which keeps the hotkey
+# from also firing alongside your own CTRL shortcuts:
+#
+#     bindl = Right, exec, vox-ptt start
+#     bindl = Right, R,   exec, vox-ptt stop
+#
+# A non-modifier key sidesteps the CTRL conflict entirely; Pause/Break makes a
+# good push-to-talk on most keyboards:
+#
+#     bind = Pause, exec, vox-ptt start
+#     bind = Pause, R,   exec, vox-ptt stop
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# Always-safe alternative: toggle
+# ─────────────────────────────────────────────────────────────────────────────
+# Bind a combo you do not use on its own. Each press toggles recording, so
+# no press/release tracking is needed at all:
+#
+#     bind = SUPER SHIFT D, exec, vox-ptt toggle
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# Commands
+# ─────────────────────────────────────────────────────────────────────────────
+# vox-ptt (scripts/vox-ptt) forwards one command to the worker:
+#
+#     start        begin recording
+#     stop         end recording → transcribe → insert
+#     toggle       recording ? stop : start
+#     hold <KEY>   start, then stop automatically when KEY is released
+#     ping         check that the worker is alive
+#
+# `hold` polls the compositor (`hyprctl repl` + hl.is_key_down, ~8 ms per
+# poll). It only tracks real keyboard input: keys injected through the
+# virtual-keyboard protocol (wtype) do not register, so `hold` stops
+# immediately under wtype. The press/release bind pair above is preferred.
+#
+# By hand, without vox-ptt:
+#
+#     printf 'start' | socat - UNIX-CONNECT:"$XDG_RUNTIME_DIR/voxlinux.sock"
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# Requirements
+# ─────────────────────────────────────────────────────────────────────────────
+# * wtype inserts the recognised text at the cursor (virtual-keyboard
+#   protocol). Without it Vox can transcribe but not paste:
+#       sudo pacman -S wtype
+# * The systemd user service must be running; check it with
+#       systemctl --user status voxlinux

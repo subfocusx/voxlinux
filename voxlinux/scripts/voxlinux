@@ -1,0 +1,27 @@
+#!/usr/bin/env python3
+"""
+voxlinux — the Vox dictation daemon (systemd user service entry point).
+
+    ExecStart=%h/.local/bin/voxlinux
+
+Listens on $XDG_RUNTIME_DIR/voxlinux.sock for `start` / `stop` / `toggle` /
+`hold KEY` (see scripts/vox-ptt) and runs the full dictation loop:
+capture → sherpa-onnx → post-processing → wtype.
+
+Also usable by hand:
+
+    voxlinux                 # run in the foreground
+    voxlinux stop            # forward one command to a running daemon
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from voxapp.daemon import main  # noqa: E402
+
+if __name__ == "__main__":
+    raise SystemExit(main())
