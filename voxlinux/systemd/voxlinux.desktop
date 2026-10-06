@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Vox Dictation
+Comment=Офлайн-диктовка (GigaAM v3): запуск сервиса
+Exec=systemctl --user start voxlinux
+Icon=audio-input-microphone
+Categories=Utility;Accessibility;
+Terminal=false
+StartupNotify=false

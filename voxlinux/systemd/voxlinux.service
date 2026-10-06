@@ -10,12 +10,6 @@ ExecStart=%h/.local/bin/voxlinux
 Restart=on-failure
 RestartSec=3
 
-# The dictation loop needs to reach the user's microphone through the
-# PipeWire/PulseAudio socket, which systemd user units already get via
-# XDG_RUNTIME_DIR. No `input` group membership is required: the hotkey comes
-# from the Hyprland binds (hyprland-bind.lua), which talk to this daemon over
-# $XDG_RUNTIME_DIR/voxlinux.sock.
-AudioDeviceName=
 
 Environment=PYTHONUNBUFFERED=1
 Environment=XDG_RUNTIME_DIR=%t

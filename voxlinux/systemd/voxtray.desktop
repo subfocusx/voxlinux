@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Vox Tray
+Comment=Иконка Vox в трее: статус, модель, перезапуск, выход
+Exec=/home/sfx/.local/bin/voxtray
+Icon=audio-input-microphone
+Categories=Utility;
+Terminal=false
+StartupNotify=false
+X-GNOME-Autostart-enabled=true

@@ -121,14 +121,43 @@ Tools.detect()
 
 def type_text(text: str) -> int:
     """
-    Insert `text` at the cursor of the focused Wayland client via `wtype`.
+    Insert `text` at the cursor of the focused Wayland client.
 
-    `wtype -- <text>` uses the virtual-keyboard protocol, so it needs neither
-    an XWayland bridge nor clipboard cooperation. Returns wtype's exit code
-    (0 = inserted); -1 means wtype is missing or could not be run.
+    Primary path: clipboard + Shift+Insert (`wl-copy` + `wtype -M shift
+    -P Insert -m shift`). One atomic paste — Chrome omnibox and other
+    single-line inputs keep focus, unlike per-key `wtype -- <text>` typing
+    which trips their autocomplete/filter on every keystroke.
+    Fallback: direct `wtype -- <text>` when wl-copy/wtype are missing.
+    Returns 0 on success, nonzero otherwise.
     """
     if not text:
         return 0
+    wl_copy = which("wl-copy")
+    if wl_copy and Tools.wtype:
+        try:
+            subprocess.Popen(
+                [wl_copy],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                start_new_session=True,
+            ).communicate(input=text, timeout=5)
+            paste = subprocess.run(
+                [Tools.wtype, "-M", "shift", "-P", "Insert", "-m", "shift"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if paste.returncode == 0:
+                return 0
+            print(
+                f"[PLATFORM] wtype paste rc={paste.returncode}: "
+                f"{paste.stderr.strip()}",
+                file=sys.stderr,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            print(f"[PLATFORM] clipboard paste failed: {exc}", file=sys.stderr)
     if not Tools.wtype:
         print("[PLATFORM] wtype not found — cannot insert text", file=sys.stderr)
         return -1
@@ -529,7 +558,7 @@ class ControlServer:
     the running worker owns the socket and the microphone.
     """
 
-    COMMANDS = ("start", "stop", "toggle", "hold")
+    COMMANDS = ("start", "stop", "toggle", "hold", "status", "ping")
 
     def __init__(
         self,
@@ -617,6 +646,8 @@ class ControlServer:
 
         if verb in ("ping", ""):
             return "pong\n"
+        if verb == "status":
+            return ("recording\n" if self.mic.is_recording else "idle\n")
         if verb not in self.COMMANDS:
             return f"error: unknown command {verb!r}\n"
 

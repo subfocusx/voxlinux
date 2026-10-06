@@ -1,0 +1,14 @@
+[Unit]
+Description=Vox tray icon (AppIndicator)
+PartOf=graphical-session.target
+After=graphical-session.target voxlinux.service
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/voxtray
+Restart=on-failure
+RestartSec=3
+PassEnvironment=WAYLAND_DISPLAY HYPRLAND_INSTANCE_SIGNATURE DISPLAY XDG_RUNTIME_DIR
+
+[Install]
+WantedBy=graphical-session.target
