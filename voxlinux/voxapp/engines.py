@@ -15,6 +15,7 @@ from abc import ABC, abstractmethod
 
 import numpy as np
 
+from voxapp import audio as preprocessing
 from voxapp.config import SAMPLE_RATE
 from voxapp.registry import MODELS, model_dir
 
@@ -86,9 +87,10 @@ class SherpaEngine(Engine):
 
         print(f"[INIT] sherpa-onnx model loaded ({subtype})")
 
-    def transcribe(self, pcm_int16: np.ndarray) -> str:
-        # sherpa-onnx expects float32 normalised to [-1, 1]
-        samples = pcm_int16.astype(np.float32) / 32768.0
+    def transcribe(self, pcm_int16: np.ndarray, trim: bool = True,
+                   normalize: bool = True) -> str:
+        samples = preprocessing.prepare(pcm_int16, SAMPLE_RATE, trim=trim,
+                                        normalize=normalize)
         stream = self._recognizer.create_stream()
         stream.accept_waveform(SAMPLE_RATE, samples)
         self._recognizer.decode_stream(stream)

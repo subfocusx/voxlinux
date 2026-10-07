@@ -65,21 +65,21 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument(
         "--model", default=DEFAULT_MODEL_ID, help=f"model id (default: {DEFAULT_MODEL_ID})"
     )
-    ap.add_argument(
-        "--steps", action="store_true", help="print every post-processing step's output"
-    )
+    ap.add_argument("--no-trim", action="store_true", help="disable silence trimming")
+    ap.add_argument("--no-norm", action="store_true", help="disable peak normalization")
     args = ap.parse_args(argv)
 
     pcm = read_wav_mono16k(args.wav)
     duration = pcm.size / SAMPLE_RATE
     print(f"[INPUT] {args.wav}: {duration:.2f}s @ {SAMPLE_RATE} Hz mono")
+    print(f"[SETUP] trim={not args.no_trim} norm={not args.no_norm}")
 
     t0 = time.perf_counter()
     engine = build_engine(args.model)
     load_s = time.perf_counter() - t0
 
     t1 = time.perf_counter()
-    raw = engine.transcribe(pcm)
+    raw = engine.transcribe(pcm, trim=not args.no_trim, normalize=not args.no_norm)
     infer_s = time.perf_counter() - t1
 
     info = MODELS[args.model]
