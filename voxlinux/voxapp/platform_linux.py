@@ -197,6 +197,55 @@ def notify(message: str, *, title: str = APP_NAME, urgency: str = "normal") -> b
     return proc.returncode == 0
 
 
+class RecIndicator:
+    """
+    Floating animated recording indicator.
+
+    Spawns `rec_overlay.py` — a borderless always-on-top pill with a pulsing
+    red dot, expanding rings and an elapsed timer, drawn with cairo at 30 fps.
+    Positioned bottom-center via a Hyprland window rule (see vox-bindings.lua
+    in ~/.config/hypr). `start()` is idempotent, `stop()` kills the process
+    and is a silent no-op when idle.
+    """
+
+    def __init__(self) -> None:
+        self._proc: subprocess.Popen | None = None
+        self._lock = threading.Lock()
+
+    @property
+    def active(self) -> bool:
+        return self._proc is not None and self._proc.poll() is None
+
+    def start(self) -> None:
+        with self._lock:
+            if self.active:
+                return
+            overlay = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                   "rec_overlay.py")
+            # NOTE: system python — Gtk/cairo есть только вне venv.
+            py = "/usr/bin/python3" if os.path.exists("/usr/bin/python3") else sys.executable
+            try:
+                self._proc = subprocess.Popen(
+                    [py, overlay],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                )
+            except OSError as exc:
+                print(f"[PLATFORM] rec overlay failed: {exc}", file=sys.stderr)
+                self._proc = None
+
+    def stop(self) -> None:
+        with self._lock:
+            proc, self._proc = self._proc, None
+        if proc is None:
+            return
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=2.0)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+
+
 _beeps_enabled = True
 _beep_files: dict[str, str] = {}
 

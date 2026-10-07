@@ -59,6 +59,7 @@ class DictationDaemon:
         self.beeps = beeps
 
         self.mic = plat.PushToTalkMic()
+        self.rec_indicator = plat.RecIndicator()
         self.control = plat.ControlServer(
             self.mic, on_start=self.start_recording, on_stop=self.stop_recording
         )
@@ -89,6 +90,7 @@ class DictationDaemon:
             return "already recording\n"
         self.mic.start()
         plat.beep("start")
+        self.rec_indicator.start()
         self.control.arm_timeout(self.max_seconds)
         return "recording\n"
 
@@ -96,6 +98,7 @@ class DictationDaemon:
         """End the hold and hand the PCM to a worker thread."""
         self.control.disarm_timeout()
         pcm = self.mic.stop()
+        self.rec_indicator.stop()
         plat.beep("stop")
         if pcm is None or self.mic.duration_ms() < self.min_record_ms:
             return "ignored (too short or silent)\n"
