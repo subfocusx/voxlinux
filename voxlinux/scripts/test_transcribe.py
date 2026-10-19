@@ -24,8 +24,13 @@ import wave
 
 import numpy as np
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
+# Make the project root importable when running from a source checkout. In a
+# frozen (PyInstaller) bundle the voxapp package is already on sys.path via
+# _internal, and __file__ may point at the bundle executable, so guard the
+# insert and only add an existing directory.
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if os.path.isdir(os.path.join(_PROJECT_ROOT, "voxapp")) and _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
 from voxapp.config import SAMPLE_RATE  # noqa: E402
 from voxapp.engines import build_engine  # noqa: E402
 from voxapp.post_processor import PostProcessor  # noqa: E402

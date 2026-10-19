@@ -3,3 +3,5 @@ voxlinux/.venv/
 voxlinux/__pycache__/
 *.wav
 __pycache__/
+voxlinux/dist/
+voxlinux/.build-venv/

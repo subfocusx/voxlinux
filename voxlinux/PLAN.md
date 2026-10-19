@@ -163,6 +163,24 @@ RTF, что при 10-секундной диктовке означает ~0.06
       только на VAD-пути, фиксированных окон нет» — не подтвердилось,
       fallback есть всегда; закреплено тестом
 
+## 9. Сборка (build)
+
+- [x] **9.1** `build.sh` — единая точка входа: версии → тестовый гейт →
+      compileall → source-тарбол → PyInstaller-бандл → BUILD-INFO → сводка.
+      Флаги `--out`, `--skip-tests`, `--no-pyinstaller`, `--with-model`
+- [x] **9.2** `scripts/make_dist.sh` — детерминированный source-тарбол (без
+      `.venv`, `__pycache__`, `dist/`, `.wav`), `SHA256SUMS` внутри и снаружи
+- [x] **9.3** `voxlinux.spec` — PyInstaller onedir по образцу `upstream/vox.spec`:
+      `collect_dynamic_libs` + `collect_data_files` для sherpa_onnx,
+      hiddenimports `voxapp.*`, исполняемые файлы `voxlinux`, `vox-ptt`,
+      `vox-transcribe`
+- [x] **9.4** Бандл самодостаточен: своя `install.sh` (лаунчеры + systemd-юнит,
+      без venv), `rec_overlay.py` остаётся обычным скриптом (нужен системный
+      python с Gtk), README-bundle.md
+- [x] **9.5** PyInstaller ставится в отдельный `.build-venv`, проектный venv не
+      трогается; при неудаче сборка падает с ненулевым кодом, но тарбол и
+      BUILD-INFO остаются
+
 ---
 
 ## Обоснование (краткое)

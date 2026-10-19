@@ -193,6 +193,45 @@ echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc && source ~/.zshrc
 
 ---
 
+## Сборка / Build
+
+`build.sh` собирает релизные артефакты в `dist/`:
+
+| артефакт | что это |
+| --- | --- |
+| `voxlinux-<версия>.src.tar.gz` | исходники (без `.venv`, `__pycache__` и `.wav`), с `SHA256SUMS` внутри |
+| `voxlinux-<версия>-linux-<arch>/` | самодостаточный бандл PyInstaller: `voxlinux`, `vox-ptt`, `vox-transcribe`, `rec_overlay.py`, systemd-юниты, свой `install.sh` — **venv не нужен** |
+| `SHA256SUMS` | контрольные суммы артефактов |
+| `BUILD-INFO.txt` | версии (python, sherpa-onnx, onnxruntime, PyInstaller), git-коммит, модель и её SHA-256, размеры и суммы артефактов |
+
+```bash
+cd voxlinux
+./build.sh                    # тесты → тарбол → бандл → BUILD-INFO
+./build.sh --skip-tests       # без тестового гейта
+./build.sh --no-pyinstaller   # только исходный тарбол
+./build.sh --with-model       # положить установленную модель в бандл
+```
+
+Сборка **проваливается**, если не проходят юнит-тесты (гейт) или если
+PyInstaller не собрал бандл. PyInstaller ставится в отдельный `.build-venv` и
+в проектный venv не попадает.
+
+Проверка артефактов:
+
+```bash
+cd dist && sha256sum -c SHA256SUMS
+./voxlinux-<версия>-linux-<arch>/vox-transcribe ../sample_ru.wav   # frozen-рантайм
+```
+
+Модель в бандл **не** входит (это 222 МБ) — она ставится отдельно в
+`~/.local/share/voxlinux/models/`. Бандловый `install.sh` ставит лаунчеры в
+`~/.local/bin` и systemd-юнит, но не создаёт venv.
+
+Лаунчеры бандла указывают на его абсолютный путь — **переносить распакованный
+бандл нельзя**, иначе переустановите его (`./install.sh` внутри бандла).
+
+---
+
 ## Хоткей
 
 ### Вариант 1 — бинды Hyprland (рекомендуется)
@@ -312,6 +351,9 @@ control-сокет), движок sherpa-onnx с GigaAM v3 (CTC/RNN-T, в т.ч.
 постобработка текста, установщик и systemd-юнит. Основной цикл воркера —
 `voxapp/daemon.py` (запись → GigaAM → постобработка → вставка через wtype),
 запускается как systemd user service `voxlinux`.
+
+Релизные артефакты собираются `build.sh` в `dist/`: source-тарбол и
+самодостаточный PyInstaller-бандл без venv (см. «Сборка / Build»).
 
 План работ — `PLAN.md` (рядом с этим файлом).
 
