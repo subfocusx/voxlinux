@@ -61,14 +61,31 @@ def replace_terms(text: str) -> str:
     return result
 
 
+SENTENCE_ENDERS = ".?!…"
+"""Characters that already close a sentence — nothing is appended after them."""
+
+SOFT_ENDERS = ",;:"
+"""Trailing marks that are left alone: a model (or a human) may end a
+dictation with a comma; appending a period after it produced "…зеленый,."."""
+
+
 def add_punctuation(text: str) -> str:
-    """Capitalize first letter and add '.' or '?' at the end."""
+    """Capitalize first letter and add '.' or '?' at the end.
+
+    Idempotent: text that already ends with a sentence terminator is returned
+    unchanged (apart from the leading capital). A trailing soft mark
+    (``,`` ``;`` ``:``) is left alone instead of being followed by a period.
+    """
     if not text:
         return text
 
     text = text[0].upper() + text[1:] if len(text) > 1 else text.upper()
 
-    if text[-1] in ".?!":
+    stripped = text.rstrip()
+    if not stripped:
+        return text
+
+    if stripped[-1] in SENTENCE_ENDERS or stripped[-1] in SOFT_ENDERS:
         return text
 
     words = text.lower().split()

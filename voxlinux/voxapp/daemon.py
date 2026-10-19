@@ -52,7 +52,7 @@ class DictationDaemon:
         auto_paste: bool = True,
         beeps: bool = ENABLE_BEEPS,
     ) -> None:
-        self.model_id = model_id or load_config().get("model") or DEFAULT_MODEL_ID
+        self.model_id = model_id or self._configured_model_id()
         self.min_record_ms = min_record_ms
         self.max_seconds = max_seconds
         self.auto_paste = auto_paste
@@ -71,16 +71,38 @@ class DictationDaemon:
         plat.set_beeps(beeps)
 
     # -- recognizer ------------------------------------------------------
+    def _configured_model_id(self) -> str:
+        """Model id from config.json, falling back to the registry default."""
+        raw = load_config().get("model")
+        if isinstance(raw, str) and raw in MODELS:
+            return raw
+        return DEFAULT_MODEL_ID
+
     def engine(self):
-        """Load the model on first use; cached afterwards."""
+        """Load the model on first use; reload it when the config changes."""
         with self._engine_lock:
-            if self._engine is None:
-                if not is_installed(self.model_id):
-                    raise RuntimeError(
-                        f"model {self.model_id!r} is not installed "
-                        f"(expected {MODELS[self.model_id]['extracted_dir']})"
-                    )
-                self._engine = build_engine(self.model_id)
+            wanted = self._configured_model_id()
+
+            if self._engine is not None and wanted == self.model_id:
+                return self._engine
+
+            if not is_installed(wanted):
+                installed = [m for m in MODELS if is_installed(m)]
+                raise RuntimeError(
+                    f"model {wanted!r} is not installed "
+                    f"(expected {MODELS[wanted]['extracted_dir']}); "
+                    f"installed: {installed or 'none'}; "
+                    "install one with: ./install.sh --model"
+                )
+
+            if self._engine is not None:
+                print(f"[VOX] model changed: {self.model_id} -> {wanted}; reloading",
+                      flush=True)
+                self._engine.unload()
+                self._engine = None
+
+            self.model_id = wanted
+            self._engine = build_engine(wanted)
             return self._engine
 
     # -- capture plumbing ------------------------------------------------
@@ -181,7 +203,28 @@ def main(argv: list[str] | None = None) -> int:
         print(plat.send_control(" ".join(argv)))
         return 0
 
-    model_id = argv[0] if argv else None
+    if argv and argv[0] in ("-l", "--list-models"):
+        print("Models (default marked with *):")
+        for mid, info in MODELS.items():
+            mark = "*" if mid == DEFAULT_MODEL_ID else " "
+            state = "installed" if is_installed(mid) else "not installed"
+            print(f" {mark} {mid:26s} {info['name']}  [{state}]")
+        return 0
+
+    model_id = None
+    if argv and argv[0] in ("-m", "--model"):
+        if len(argv) < 2:
+            print("--model needs an id (see --list-models)", file=sys.stderr)
+            return 2
+        model_id = argv[1]
+    elif argv and not argv[0].startswith("-"):
+        model_id = argv[0]
+
+    if model_id is not None and model_id not in MODELS:
+        print(f"unknown model {model_id!r}; known ids: {', '.join(MODELS)}",
+              file=sys.stderr)
+        return 2
+
     daemon = DictationDaemon(model_id=model_id)
     daemon.run_forever()
     return 0

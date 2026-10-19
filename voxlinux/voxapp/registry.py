@@ -1,12 +1,35 @@
 """
 Catalog of speech-to-text models available to VoxLinux.
 
-Only one model is supported: GigaAM v3 (Russian), sherpa-onnx neMo CTC.
+All models are official sherpa-onnx exports of GigaAM v3 (Russian), published
+in the sherpa-onnx "asr-models" release:
+
+    https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models
+
+There are four variants, and they differ in two independent axes:
+
+    * architecture — CTC (single model, greedy decode) vs RNN-T/transducer
+      (encoder + decoder + joiner);
+    * output — plain (letters only, 34 tokens) vs "punct" (punctuation,
+      capitalisation and text normalisation baked into the model, 257 / 1025
+      tokens).
+
+Model ids and what they are good for:
+
+    gigaam-v3-e2e-rnnt-punct   default. Best WER of the punctuation-aware
+                              models (11.2 vs 12.0 for CTC) and the best
+                              punctuation F1. ~+15% latency vs CTC.
+    gigaam-v3-e2e-ctc-punct    same native punctuation at CTC speed. Use on
+                              slow CPUs.
+    gigaam-v3-rnnt-plain       no native punctuation (needs our heuristics),
+                              but the only char-level transducer — the only
+                              one where model-level hotwords work.
+    gigaam-v3                  legacy plain CTC. Fallback / rollback.
 
 Each entry describes:
 
     engine:               "sherpa-onnx"
-    engine_subtype:       sherpa-onnx factory variant ("nemo-ctc")
+    engine_subtype:       sherpa-onnx factory variant ("nemo-ctc" / "nemo-transducer")
     url:                  archive URL (tar.bz2 for sherpa-onnx)
     archive_format:       "tar.bz2"
     extracted_dir:        the top-level folder produced by extracting
@@ -14,7 +37,10 @@ Each entry describes:
     files:                dict of relative paths inside extracted_dir,
                           named by the engine factory (see engines.py)
     needs_term_replace:   apply TERM_REPLACEMENTS post-processing
-    needs_punctuation:    apply add_punctuation post-processing
+    needs_punctuation:    apply add_punctuation post-processing. False for
+                          models that emit punctuation themselves — running
+                          the heuristic on top of native punctuation
+                          produces artefacts like "…зеленый,.".
 """
 
 from __future__ import annotations
@@ -25,36 +51,104 @@ from typing import Any
 from voxapp.config import get_models_dir
 
 _SHERPA_BASE = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models"
-_GIGAAM_V3 = "sherpa-onnx-nemo-ctc-giga-am-v3-russian-2025-12-16"
+
+_GIGAAM_V3_CTC = "sherpa-onnx-nemo-ctc-giga-am-v3-russian-2025-12-16"
+_GIGAAM_V3_CTC_PUNCT = "sherpa-onnx-nemo-ctc-punct-giga-am-v3-russian-2025-12-16"
+_GIGAAM_V3_RNNT = "sherpa-onnx-nemo-transducer-giga-am-v3-russian-2025-12-16"
+_GIGAAM_V3_RNNT_PUNCT = "sherpa-onnx-nemo-transducer-punct-giga-am-v3-russian-2025-12-16"
+
+_RNNT_FILES = {
+    "encoder": "encoder.int8.onnx",
+    "decoder": "decoder.onnx",
+    "joiner": "joiner.onnx",
+    "tokens": "tokens.txt",
+}
+
+_CTC_FILES = {
+    "model": "model.int8.onnx",
+    "tokens": "tokens.txt",
+}
 
 
 MODELS: dict[str, dict[str, Any]] = {
-    # ---------------- GigaAM v3 (Russian) — the only model ----------------
-    "gigaam-v3": {
-        "name": "GigaAM v3 (русский)",
+    # ---------------- GigaAM v3, punctuation-aware ----------------
+    "gigaam-v3-e2e-rnnt-punct": {
+        "name": "GigaAM v3 e2e RNN-T (русский, с пунктуацией)",
+        "engine": "sherpa-onnx",
+        "engine_subtype": "nemo-transducer",
+        "language": "ru",
+        "size_mb": 162,
+        "url": f"{_SHERPA_BASE}/{_GIGAAM_V3_RNNT_PUNCT}.tar.bz2",
+        "archive_format": "tar.bz2",
+        "extracted_dir": _GIGAAM_V3_RNNT_PUNCT,
+        "files": dict(_RNNT_FILES),
+        "needs_term_replace": True,
+        "needs_punctuation": False,
+        "description": (
+            "GigaAM v3 от Сбера — end-to-end RNN-T с пунктуацией, регистром и "
+            "нормализацией текста внутри модели (neMo transducer, sherpa-onnx). "
+            "Лучший WER среди пунктуационных моделей: 11.2 против 12.0 у CTC."
+        ),
+    },
+    "gigaam-v3-e2e-ctc-punct": {
+        "name": "GigaAM v3 e2e CTC (русский, с пунктуацией)",
         "engine": "sherpa-onnx",
         "engine_subtype": "nemo-ctc",
         "language": "ru",
-        "size_mb": 163,
-        "url": f"{_SHERPA_BASE}/{_GIGAAM_V3}.tar.bz2",
+        "size_mb": 155,
+        "url": f"{_SHERPA_BASE}/{_GIGAAM_V3_CTC_PUNCT}.tar.bz2",
         "archive_format": "tar.bz2",
-        "extracted_dir": _GIGAAM_V3,
-        "files": {
-            "model": "model.int8.onnx",
-            "tokens": "tokens.txt",
-        },
+        "extracted_dir": _GIGAAM_V3_CTC_PUNCT,
+        "files": dict(_CTC_FILES),
+        "needs_term_replace": True,
+        "needs_punctuation": False,
+        "description": (
+            "То же, что RNN-T-вариант, но на CTC: та же нативная пунктуация и "
+            "регистр при скорости обычного CTC. Для медленных CPU."
+        ),
+    },
+
+    # ---------------- GigaAM v3, plain (letters only) ----------------
+    "gigaam-v3-rnnt-plain": {
+        "name": "GigaAM v3 RNN-T (русский, без пунктуации)",
+        "engine": "sherpa-onnx",
+        "engine_subtype": "nemo-transducer",
+        "language": "ru",
+        "size_mb": 159,
+        "url": f"{_SHERPA_BASE}/{_GIGAAM_V3_RNNT}.tar.bz2",
+        "archive_format": "tar.bz2",
+        "extracted_dir": _GIGAAM_V3_RNNT,
+        "files": dict(_RNNT_FILES),
+        "needs_term_replace": True,
+        "needs_punctuation": True,
+        "description": (
+            "Только буквы (34 токена) — пунктуацию добавляют наши эвристики. "
+            "Единственная char-level модель: только с ней работают "
+            "model-level hotwords (у punct-моделей BPE — падение sherpa-onnx)."
+        ),
+    },
+    "gigaam-v3": {
+        "name": "GigaAM v3 CTC (русский, legacy)",
+        "engine": "sherpa-onnx",
+        "engine_subtype": "nemo-ctc",
+        "language": "ru",
+        "size_mb": 155,
+        "url": f"{_SHERPA_BASE}/{_GIGAAM_V3_CTC}.tar.bz2",
+        "archive_format": "tar.bz2",
+        "extracted_dir": _GIGAAM_V3_CTC,
+        "files": dict(_CTC_FILES),
         "needs_term_replace": True,
         "needs_punctuation": True,
         "description": (
             "GigaAM v3 от Сбера — офлайн-модель распознавания русской речи "
-            "(neMo CTC, sherpa-onnx)."
+            "(neMo CTC, sherpa-onnx). Только буквы, без пунктуации."
         ),
     },
 }
 
 
-DEFAULT_MODEL_ID = "gigaam-v3"
-RECOMMENDED_MODEL_ID = "gigaam-v3"
+DEFAULT_MODEL_ID = "gigaam-v3-e2e-rnnt-punct"
+RECOMMENDED_MODEL_ID = "gigaam-v3-e2e-rnnt-punct"
 
 
 def model_dir(model_id: str) -> str:

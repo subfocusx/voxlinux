@@ -67,7 +67,24 @@ def main(argv: list[str] | None = None) -> int:
     )
     ap.add_argument("--no-trim", action="store_true", help="disable silence trimming")
     ap.add_argument("--no-norm", action="store_true", help="disable peak normalization")
+    ap.add_argument(
+        "--steps", action="store_true", help="print every post-processing step"
+    )
+    ap.add_argument(
+        "--list-models", action="store_true", help="list known models and exit"
+    )
     args = ap.parse_args(argv)
+
+    if args.list_models:
+        for mid, info in MODELS.items():
+            mark = "*" if mid == DEFAULT_MODEL_ID else " "
+            print(f" {mark} {mid:26s} {info['name']}")
+        return 0
+
+    if args.model not in MODELS:
+        print(f"unknown model {args.model!r}; known: {', '.join(MODELS)}",
+              file=sys.stderr)
+        return 2
 
     pcm = read_wav_mono16k(args.wav)
     duration = pcm.size / SAMPLE_RATE
@@ -83,17 +100,9 @@ def main(argv: list[str] | None = None) -> int:
     infer_s = time.perf_counter() - t1
 
     info = MODELS[args.model]
-    pp = PostProcessor(
-        lang=info.get("language", "ru"),
-        enable_terms=info.get("needs_term_replace", True),
-        enable_fillers=True,
-        enable_itn=True,
-        enable_sentence_spacing=True,
-        enable_punctuation=info.get("needs_punctuation", True),
-        enable_capitalization=False,
-        enable_spacing=False,
-        always_leading_space=False,
-    )
+    # Same pipeline the daemon uses, so the output matches what a real
+    # dictation would insert.
+    pp = PostProcessor.from_model_config(info)
     result = pp.process(raw)
 
     print()

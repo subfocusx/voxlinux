@@ -12,7 +12,7 @@
 #   * installs the systemd *user* unit (rendered from systemd/voxlinux.service)
 #   * optionally: adds the user to the `input` group or a udev rule for the
 #     keyboard, so push-to-talk works without any compositor config
-#   * optionally: downloads the GigaAM v3 model (~163 MB)
+#   * optionally: downloads the speech model (size from voxapp/registry.py)
 #   * prints the Hyprland Lua bind that wires the hotkey to vox-ptt
 #
 set -euo pipefail
@@ -26,8 +26,13 @@ UNIT_DST="$UNIT_DIR/voxlinux.service"
 
 DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
 MODELS_DIR="$DATA_HOME/voxlinux/models"
-MODEL_ID="gigaam-v3"
-MODEL_DIR_NAME="sherpa-onnx-nemo-ctc-giga-am-v3-russian-2025-12-16"
+# Speech model selection — resolved at runtime from voxapp/registry.py
+# (see resolve_model below). MODEL_ID stays empty until then, meaning
+# "the registry default". MODEL_DIR_NAME / MODEL_SIZE_MB cache the
+# registry metadata for the selected MODEL_ID.
+MODEL_ID=""
+MODEL_DIR_NAME=""
+MODEL_SIZE_MB=""
 
 MODE="install"
 ASSUME_YES=0
@@ -38,7 +43,8 @@ UDEV_DEVICE=""
 UDEV_RULE=""
 DO_SERVICE=1
 PURGE_MODEL=0
-
+DO_VAD=1
+PURGE_VAD=0
 RED=$'\033[31m'; GRN=$'\033[32m'; YEL=$'\033[33m'; BLU=$'\033[36m'; DIM=$'\033[2m'; RST=$'\033[0m'
 if [[ ! -t 1 ]]; then RED=""; GRN=""; YEL=""; BLU=""; DIM=""; RST=""; fi
 
@@ -60,12 +66,15 @@ usage: install.sh [options]
   --uninstall        remove launchers, systemd unit and the downloaded model
   --yes, -y          do not ask questions (non-interactive)
   --deps             install missing system packages with sudo (pacman/apt)
-  --model[=ID]       download the speech model (default: $MODEL_ID)
+  --model[=ID]       download the speech model (default: registry default;
+                     ID must be an id from voxapp/registry.py)
   --no-model         skip the model download
+  --no-vad           skip the Silero VAD model download
   --input-group      sudo usermod -aG input \$USER  (evdev hotkey, no compositor config)
   --udev-rule PATH   install a udev rule for that keyboard (e.g. /dev/input/by-id/...)
   --skip-service     do not install the systemd user unit
-  --purge-model      with --uninstall: also delete the downloaded model
+  --purge-model      with --uninstall: also delete the selected model's directory
+  --purge-vad        with --uninstall: also delete the Silero VAD model (silero_vad.onnx)
   -h, --help         this text
 
 Environment: VOX_BIN_DIR (default ~/.local/bin) overrides the launcher directory.
@@ -85,6 +94,8 @@ while [[ $# -gt 0 ]]; do
     --udev-rule)  UDEV_DEVICE="${2:-}"; [[ -n "$UDEV_DEVICE" ]] || { shift; UDEV_DEVICE="${1:-}"; }
                   [[ -n "$UDEV_DEVICE" ]] || die "--udev-rule needs a device path"; UDEV_RULE=1 ;;
     --purge-model)   PURGE_MODEL=1 ;;
+    --purge-vad)     PURGE_VAD=1 ;;
+    --no-vad)        DO_VAD=0 ;;
     --skip-service) DO_SERVICE=0 ;;
     -h|--help)    usage; exit 0 ;;
     *)            usage >&2; die "unknown option: $1" ;;
@@ -102,6 +113,102 @@ confirm() {
 have() { command -v "$1" >/dev/null 2>&1; }
 
 venv_py() { [[ -x "$VENV_DIR/bin/python" ]] && echo "$VENV_DIR/bin/python" || echo "$VENV_DIR/bin/python3"; }
+
+# ---------------------------------------------------------------------------
+# Model registry (voxapp/registry.py) — all speech-model metadata comes from
+# here at runtime, never from hardcoded names or sizes. Queries prefer the
+# venv python and fall back to system python3 so --check stays offline and
+# works even when the venv is missing.
+# ---------------------------------------------------------------------------
+
+registry_python() {
+  if [[ -x "$VENV_DIR/bin/python" ]]; then echo "$VENV_DIR/bin/python"; return 0; fi
+  if [[ -x "$VENV_DIR/bin/python3" ]]; then echo "$VENV_DIR/bin/python3"; return 0; fi
+  if have python3; then command -v python3; return 0; fi
+  return 1
+}
+
+registry_default_model() {
+  local py; py="$(registry_python)" || return 1
+  PYTHONPATH="$SRC_DIR" "$py" - <<'PY'
+from voxapp.registry import DEFAULT_MODEL_ID, RECOMMENDED_MODEL_ID
+print(RECOMMENDED_MODEL_ID or DEFAULT_MODEL_ID)
+PY
+}
+
+registry_valid_ids() {
+  local py; py="$(registry_python)" || return 1
+  PYTHONPATH="$SRC_DIR" "$py" - <<'PY'
+from voxapp.registry import MODELS
+print(" ".join(sorted(MODELS)))
+PY
+}
+
+registry_extracted_dir() {
+  local py; py="$(registry_python)" || return 1
+  PYTHONPATH="$SRC_DIR" "$py" - "$1" <<'PY'
+import sys
+from voxapp.registry import MODELS
+print(MODELS[sys.argv[1]]["extracted_dir"])
+PY
+}
+
+registry_size_mb() {
+  local py; py="$(registry_python)" || return 1
+  PYTHONPATH="$SRC_DIR" "$py" - "$1" <<'PY'
+import sys
+from voxapp.registry import MODELS
+print(MODELS[sys.argv[1]]["size_mb"])
+PY
+}
+
+registry_model_files() {
+  local py; py="$(registry_python)" || return 1
+  PYTHONPATH="$SRC_DIR" "$py" - "$1" <<'PY'
+import sys
+from voxapp.registry import MODELS
+for rel in MODELS[sys.argv[1]]["files"].values():
+    print(rel)
+PY
+}
+
+validate_model_id() {
+  local id="$1" valid=""
+  valid="$(registry_valid_ids 2>/dev/null || true)"
+  if [[ -z "$valid" ]]; then
+    # No python to read the registry (e.g. bare --check without a venv):
+    # cannot validate — callers degrade gracefully instead of failing.
+    return 0
+  fi
+  local candidate
+  for candidate in $valid; do
+    [[ "$candidate" == "$id" ]] && return 0
+  done
+  die "unknown model '$id' (valid ids: $valid)"
+}
+
+resolve_model() {
+  if [[ -z "$MODEL_ID" ]]; then
+    MODEL_ID="$(registry_default_model 2>/dev/null || true)"
+  fi
+  if [[ -z "$MODEL_ID" ]]; then
+    return 0
+  fi
+  validate_model_id "$MODEL_ID"
+  MODEL_DIR_NAME="$(registry_extracted_dir "$MODEL_ID" 2>/dev/null || true)"
+  MODEL_SIZE_MB="$(registry_size_mb "$MODEL_ID" 2>/dev/null || true)"
+}
+
+model_files_present() {
+  [[ -n "${MODEL_ID:-}" && -n "${MODEL_DIR_NAME:-}" ]] || return 1
+  local rel count=0
+  while IFS= read -r rel; do
+    [[ -n "$rel" ]] || continue
+    count=$((count + 1))
+    [[ -f "$MODELS_DIR/$MODEL_DIR_NAME/$rel" ]] || return 1
+  done < <(registry_model_files "$MODEL_ID" 2>/dev/null || true)
+  (( count > 0 ))
+}
 
 # ---------------------------------------------------------------------------
 # Environment checks (shared by --check and the install path)
@@ -224,12 +331,34 @@ check_service() {
 }
 
 check_model() {
-  if [[ -f "$MODELS_DIR/$MODEL_DIR_NAME/model.int8.onnx" ]]; then
-    ok "model $MODEL_ID installed at $MODELS_DIR/$MODEL_DIR_NAME"
+  if [[ -z "${MODEL_ID:-}" || -z "${MODEL_DIR_NAME:-}" ]]; then
+    warn "model registry unreadable (no python for voxapp/registry.py) — cannot verify model files"
+    local vad_path="$MODELS_DIR/silero_vad.onnx"
+    if [[ -f "$vad_path" ]]; then
+      ok "VAD model (Silero) installed at $vad_path"
+    else
+      info "VAD model (Silero) not downloaded (~0.6 MB) — run ./install.sh (or --no-vad to skip)"
+    fi
+    return
+  fi
+  local size_label="${MODEL_SIZE_MB:-?} MB" rel missing=()
+  while IFS= read -r rel; do
+    [[ -n "$rel" ]] || continue
+    [[ -f "$MODELS_DIR/$MODEL_DIR_NAME/$rel" ]] || missing+=("$rel")
+  done < <(registry_model_files "$MODEL_ID" 2>/dev/null || true)
+  if (( ${#missing[@]} == 0 )); then
+    ok "model $MODEL_ID installed at $MODELS_DIR/$MODEL_DIR_NAME (~$size_label)"
   elif [[ -d "$MODELS_DIR/$MODEL_DIR_NAME" ]]; then
-    warn "model dir present but model.int8.onnx missing — re-run with --model"
+    warn "model dir present but missing: ${missing[*]} — re-run with --model"
   else
-    info "model $MODEL_ID not downloaded (~163 MB) — run ./install.sh --model"
+    info "model $MODEL_ID not downloaded (~$size_label) — run ./install.sh --model"
+  fi
+  # Silero VAD model (tiny, optional).
+  local vad_path="$MODELS_DIR/silero_vad.onnx"
+  if [[ -f "$vad_path" ]]; then
+    ok "VAD model (Silero) installed at $vad_path"
+  else
+    info "VAD model (Silero) not downloaded (~0.6 MB) — run ./install.sh (or --no-vad to skip)"
   fi
 }
 
@@ -415,12 +544,13 @@ EOF
 
 install_model() {
   step "Speech model"
-  if [[ -d "$MODELS_DIR/$MODEL_DIR_NAME/model.int8.onnx" ]]; then
+  if model_files_present; then
     ok "already installed: $MODELS_DIR/$MODEL_DIR_NAME"
     return
   fi
   (( DO_MODEL )) || { info "skipped (--no-model)"; return; }
-  confirm "download $MODEL_ID (~163 MB)?" || { info "skipped"; return; }
+  local size_label="${MODEL_SIZE_MB:-?} MB"
+  confirm "download $MODEL_ID (~$size_label)?" || { info "skipped"; return; }
   mkdir -p "$MODELS_DIR"
   PYTHONPATH="$SRC_DIR" "$(venv_py)" - "$MODEL_ID" <<'PY'
 import sys
@@ -444,6 +574,36 @@ PY
   ok "model installed in $MODELS_DIR/$MODEL_DIR_NAME"
 }
 
+install_vad() {
+  step "VAD model (Silero)"
+  local vad_path="$MODELS_DIR/silero_vad.onnx"
+  if [[ -f "$vad_path" ]]; then
+    ok "already installed: $vad_path"
+    return
+  fi
+  (( DO_VAD )) || { info "skipped (--no-vad)"; return; }
+  mkdir -p "$MODELS_DIR"
+  if PYTHONPATH="$SRC_DIR" "$(venv_py)" - <<'PY'
+from voxapp.vad import download_vad_model
+
+state = {"last": -1}
+
+def progress(done, total, stage):
+    if total and total > 0:
+        pct = int(done * 100 / total)
+        if pct != state["last"]:
+            state["last"] = pct
+            print(f"\r  {stage}: {pct:3d}% ({done // 1024}/{total // 1024} KiB)", end="", flush=True)
+
+download_vad_model(on_progress=progress, on_log=lambda m: print(f"  {m}"))
+print()
+PY
+  then
+    ok "VAD model installed in $MODELS_DIR"
+  else
+    warn "VAD model download failed — continuing (app falls back to fixed chunks)"
+  fi
+}
 print_bind_hint() {
   cat <<EOF
 
@@ -473,6 +633,7 @@ do_install() {
   install_launchers
   setup_input
   install_model
+  install_vad
   install_service
 
   step "Verification"
@@ -496,17 +657,28 @@ do_uninstall() {
   else
     info "no systemd unit"
   fi
-  # Deleting a re-downloadable 163 MB model is opt-in only: `--yes` must never
+  # Deleting a re-downloadable model is opt-in only: `--yes` must never
   # destroy it as a side effect of removing the launchers.
-  if [[ -d "$MODELS_DIR/$MODEL_DIR_NAME" ]]; then
+  if [[ -n "${MODEL_DIR_NAME:-}" && -d "$MODELS_DIR/$MODEL_DIR_NAME" ]]; then
     if (( PURGE_MODEL )); then
       rm -rf "$MODELS_DIR/$MODEL_DIR_NAME"; ok "model $MODEL_ID removed"
     else
-      info "model kept (~163 MB) — pass --purge-model to delete it"
+      info "model kept (~${MODEL_SIZE_MB:-?} MB) — pass --purge-model to delete it"
+    fi
+  fi
+  # The Silero VAD model is small (640 KB) and lives directly in MODELS_DIR.
+  local vad_path="$MODELS_DIR/silero_vad.onnx"
+  if [[ -f "$vad_path" ]]; then
+    if (( PURGE_VAD )); then
+      rm -f "$vad_path"; ok "VAD model (Silero) removed"
+    else
+      info "VAD model kept (640 KB) — pass --purge-vad to delete it"
     fi
   fi
   info "the .venv ($VENV_DIR) and ~/.local/share/voxlinux (db, config, logs) were kept — delete them by hand"
 }
+
+resolve_model
 
 case "$MODE" in
   check)     run_checks ;;

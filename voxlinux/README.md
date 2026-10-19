@@ -4,15 +4,19 @@
 появляется в активном окне. Порт [Vox](https://github.com/privatekey7/Vox)
 (privatekey7) с Windows на Linux.
 
-* **Полностью офлайн.** Модель GigaAM v3 (neMo CTC, ~163 МБ) скачивается один
-  раз и работает локально, без сети и без облачного API.
+* **Полностью офлайн.** Модель по умолчанию — GigaAM v3 e2e RNN-T с нативной
+  пунктуацией (`gigaam-v3-e2e-rnnt-punct`, архив ~162 МБ, распакованная
+  ~224 МБ). Скачивается один
+  раз и дальше работает локально, без сети и без облачного API. Другие
+  варианты GigaAM v3 — в таблице «Models / Модели».
 * **Push-to-talk, а не always-on.** Запись идёт только пока удерживается
   горячая клавиша.
 * **Русский язык из коробки** с постобработкой: словарь терминов, чистка
   filler-слов, ITN (числительные прописью → цифрами), расстановка пробелов и
-  знаков препинания, капитализация по контексту.
-* **Без Python-окна и трея.** Живёт как systemd *user*-сервис, статус —
-  через `notify-send`.
+  знаков препинания, капитализация по контексту. У моделей с нативной
+  пунктуацией шаг `add_punctuation` отключён, чтобы не портить их вывод.
+* **Без Python-окна.** Живёт как systemd *user*-сервис, статус — через
+  `notify-send` (трей опционален — `voxtray`).
 
 ---
 
@@ -21,11 +25,13 @@
 ```
 горячая клавиша ──► микрофон (16 кГц / моно / int16)
                           │
-                     sherpa-onnx ──► GigaAM v3 ──► сырой текст
-                                                   │
-                     постобработка: terms → fillers → ITN → spacing →
-                                    punctuation → capitalization
-                                                   │
+       (Silero VAD: сегменты ≤20 с, опционально) ──► sherpa-onnx ──► GigaAM v3 (CTC/RNN-T)
+                                                                       │
+                                                                  сырой текст
+                                                                       │
+       постобработка: terms → fillers → ITN → spacing →
+                      punctuation (если модель без нативной) → capitalization
+                                                                       │
                           wtype ──► текст в курсор активного окна
 ```
 
@@ -39,7 +45,7 @@ Hyprland, которые шлют ему команду по unix-сокету.
 | --- | --- |
 | `voxapp/platform_linux.py` | микрофон, хоткей (evdev / опрос Hyprland), вставка текста, уведомления, бипы, control-сокет |
 | `voxapp/engines.py` | бэкенд распознавания (sherpa-onnx) |
-| `voxapp/registry.py` | каталог моделей (сейчас одна — GigaAM v3) |
+| `voxapp/registry.py` | каталог моделей (четыре варианта GigaAM v3) |
 | `voxapp/downloader.py` | скачивание и распаковка модели |
 | `voxapp/post_processor.py` и friends | постобработка текста |
 | `scripts/vox-ptt` | CLI к control-сокету (его ставят в `~/.local/bin`) |
@@ -47,6 +53,69 @@ Hyprland, которые шлют ему команду по unix-сокету.
 | `hyprland-bind.conf.example` | пример биндов (Lua и legacy `.conf`) |
 
 ---
+
+## Model / Модель
+
+По умолчанию используется **GigaAM v3 e2e RNN-T с нативной пунктуацией**
+(`gigaam-v3-e2e-rnnt-punct`): NeMo-трансдьюсер, в котором пунктуация,
+регистр и нормализация текста уже встроены в модель. Архив ~162 МБ,
+распакованная ~224 МБ. Модель скачивается один раз и дальше работает
+полностью офлайн, без сети и без облачного API.
+
+Пунктуация и регистр у punct-моделей нативные, поэтому эвристический шаг
+`add_punctuation` для них отключён (флаг `needs_punctuation=False`) — иначе
+получаются артефакты вроде «…зеленый,.». rule-based ITN при этом всё
+равно работает: модель не переводит «пять серверов» в «5 серверов».
+
+Model-level hotwords у punct-моделей недоступны: sherpa-onnx требует
+sentencepiece `bpe_vocab` для BPE-моделей и падает с SIGSEGV без него, а в
+релизе такого словаря нет. Словарь терминов поэтому остаётся пост-обработкой
+(`voxapp/terms.py`).
+
+Производительность (измерено): RTF ~0.05 на современном 8-ядерном CPU,
+~0.4–0.7 с от отпускания клавиши до вставки для диктовки 10 с.
+
+### Models / Модели
+
+| id | архитектура | нативная пунктуация | архив | когда использовать |
+| --- | --- | --- | --- | --- |
+| `gigaam-v3-e2e-rnnt-punct` (default) | NeMo transducer (RNN-T) | да | ~162 МБ | по умолчанию; лучший WER (11.2) и пунктуация |
+| `gigaam-v3-e2e-ctc-punct` | NeMo CTC | да | ~155 МБ | та же пунктуация на скорости CTC (медленные CPU) |
+| `gigaam-v3-rnnt-plain` | NeMo transducer (RNN-T) | нет (эвристики) | ~159 МБ | единственная char-level модель — только с ней работают model-level hotwords |
+| `gigaam-v3` | NeMo CTC (legacy) | нет | ~155 МБ | fallback / откат |
+
+### VAD / Сегментация длинных диктовок
+
+Энкодер GigaAM v3 держит 5000 позиционных эмбеддингов (25 кадров/с), поэтому
+одно декодирование ограничено ~200 с: 199 с ещё декодируется, 201 с падает в
+ONNX Runtime с «5000 by 5500». Длинные диктовки режутся на сегменты речи
+(≤20 с) до декодирования.
+
+Для этого используется Silero VAD (`silero_vad.onnx`, ~640 КБ) в каталоге
+моделей. Он опционален: без него приложение падает на фиксированные окна
+по 30 с (границы могут резать слова, но крэша не будет).
+
+Установка VAD-модели:
+
+- автоматически при `./install.sh` (шаг «VAD model (Silero)»);
+- пропустить: `./install.sh --no-vad`;
+- вручную: положить `silero_vad.onnx` в `~/.local/share/voxlinux/models/`
+  (URL — `VAD_MODEL_URL` в `voxapp/vad.py`).
+
+### Переключение моделей / Switching models
+
+Демон читает ключ `"model"` из `~/.local/share/voxlinux/config.json` и
+перезагружает движок при его изменении — переустанавливать ничего не нужно.
+
+- CLI лаунчера: `voxlinux --list-models` / `-l` и `voxlinux --model <id>` /
+  `-m <id>` (или позиционный аргумент `<id>`).
+- Установщик: `./install.sh --model=<id>` (скачает выбранную модель).
+- Вручную: записать `"model": "<id>"` в `config.json` — демон подхватит при
+  следующей диктовке.
+
+Выбранная модель должна быть установлена (распакована в
+`~/.local/share/voxlinux/models/`); иначе первое распознавание завершится
+ошибкой.
 
 ## Требования
 
@@ -75,8 +144,8 @@ cd voxlinux
 2. кладёт в `~/.local/bin` лаунчеры `vox-ptt` и `voxlinux`;
 3. рендерит `systemd/voxlinux.service` в
    `~/.config/systemd/user/voxlinux.service` и включает сервис;
-4. скачивает модель GigaAM v3 (~163 МБ) в
-   `~/.local/share/voxlinux/models/`;
+4. скачивает модель по умолчанию GigaAM v3 e2e RNN-T punct (~162 МБ) и
+   Silero VAD (~640 КБ) в `~/.local/share/voxlinux/models/`;
 5. печатает готовый бинд для Hyprland.
 
 Убедитесь, что `~/.local/bin` в `PATH`:
@@ -91,11 +160,12 @@ echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc && source ~/.zshrc
 | --- | --- |
 | `--check` | только отчёт об окружении, ничего не меняет |
 | `--deps` | доустановить системные пакеты через `sudo` (pacman) |
-| `--model` / `--no-model` | скачать / пропустить модель |
+| `--model[=ID]` / `--no-model` | скачать модель (по умолчанию из реестра) или пропустить; `--model=<id>` — конкретный вариант |
+| `--no-vad` | пропустить скачивание Silero VAD (опционально) |
 | `--input-group` | `sudo usermod -aG input $USER` — хоткей без биндов |
 | `--udev-rule PATH` | udev-правило `uaccess` для конкретной клавиатуры |
 | `--skip-service` | не ставить systemd-юнит |
-| `--uninstall` | снять лаунчеры, юнит и (по `--purge-model`) модель |
+| `--uninstall` | снять лаунчеры, юнит и (по `--purge-model` / `--purge-vad`) модели |
 | `-y` | не задавать вопросов |
 
 ---
@@ -191,9 +261,9 @@ python scripts/test_platform.py                       # вставка текс�
 
 | Путь | Содержимое |
 | --- | --- |
-| `~/.local/share/voxlinux/models/` | скачанные модели (~163 МБ на модель) |
+| `~/.local/share/voxlinux/models/` | скачанные модели (~155–162 МБ на модель + Silero VAD ~640 КБ) |
 | `~/.local/share/voxlinux/vox_data.db` | база (история диктовок) |
-| `~/.local/share/voxlinux/config.json` | настройки, в т.ч. `hotkey` |
+| `~/.local/share/voxlinux/config.json` | настройки, в т.ч. `hotkey` и `model` |
 | `~/.local/state/voxlinux/logs/` | логи |
 | `$XDG_RUNTIME_DIR/voxlinux.sock` | control-сокет воркера |
 
@@ -208,7 +278,8 @@ rm -rf ~/.local/share/voxlinux       # + база и конфиг
 ---
 
 Готово и проверено: платформенный слой (микрофон, хоткей, вставка, уведомления,
-control-сокет), движок sherpa-onnx с GigaAM v3, скачивание модели, вся
+control-сокет), движок sherpa-onnx с GigaAM v3 (CTC/RNN-T, в т.ч. с нативной
+пунктуацией), Silero VAD, скачивание моделей, вся
 постобработка текста, установщик и systemd-юнит. Основной цикл воркера —
 `voxapp/daemon.py` (запись → GigaAM → постобработка → вставка через wtype),
 запускается как systemd user service `voxlinux`.
