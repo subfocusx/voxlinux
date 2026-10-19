@@ -77,6 +77,7 @@ class Tools:
     """Resolved paths to the external helpers, resolved once at import."""
 
     wtype: str | None = None
+    ydotool: str | None = None
     notify_send: str | None = None
     paplay: str | None = None
     hyprctl: str | None = None
@@ -84,11 +85,13 @@ class Tools:
     @classmethod
     def detect(cls) -> dict[str, str | None]:
         cls.wtype = which("wtype")
+        cls.ydotool = which("ydotool")
         cls.notify_send = which("notify-send")
         cls.paplay = which("paplay")
         cls.hyprctl = which("hyprctl")
         return {
             "wtype": cls.wtype,
+            "ydotool": cls.ydotool,
             "notify-send": cls.notify_send,
             "paplay": cls.paplay,
             "hyprctl": cls.hyprctl,
@@ -127,7 +130,9 @@ def type_text(text: str) -> int:
     -P Insert -m shift`). One atomic paste — Chrome omnibox and other
     single-line inputs keep focus, unlike per-key `wtype -- <text>` typing
     which trips their autocomplete/filter on every keystroke.
-    Fallback: direct `wtype -- <text>` when wl-copy/wtype are missing.
+    Fallback 1: direct `wtype -- <text>`.
+    Fallback 2: `ydotool type --delay 20 -- <text>` (uinput virtual
+    keyboard, needs the ydotool daemon running).
     Returns 0 on success, nonzero otherwise.
     """
     if not text:
@@ -158,22 +163,58 @@ def type_text(text: str) -> int:
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
             print(f"[PLATFORM] clipboard paste failed: {exc}", file=sys.stderr)
-    if not Tools.wtype:
+    if Tools.wtype:
+        try:
+            proc = subprocess.run(
+                [Tools.wtype, "--", text],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            print(f"[PLATFORM] wtype failed: {exc}", file=sys.stderr)
+            proc = None
+        if proc is not None:
+            if proc.returncode == 0:
+                return 0
+            print(
+                f"[PLATFORM] wtype rc={proc.returncode}: {proc.stderr.strip()}",
+                file=sys.stderr,
+            )
+    else:
         print("[PLATFORM] wtype not found — cannot insert text", file=sys.stderr)
+
+    # ydotool fallback (optional, needs the daemon running).
+    if not Tools.ydotool:
+        if not Tools.wtype:
+            print(
+                "[PLATFORM] neither wtype nor ydotool available — cannot insert text",
+                file=sys.stderr,
+            )
+        else:
+            print("[PLATFORM] ydotool not found — cannot insert text", file=sys.stderr)
         return -1
+
+    socket_path = os.environ.get("YDOOTOOL_SOCKET", "/tmp/.ydotool_socket")
+    if not os.path.exists(socket_path):
+        print(
+            f"[PLATFORM] ydotool daemon socket not found at {socket_path} — "
+            "start it with `sudo ydotool daemon` (or the systemd unit)",
+            file=sys.stderr,
+        )
     try:
         proc = subprocess.run(
-            [Tools.wtype, "--", text],
+            [Tools.ydotool, "type", "--delay", "20", "--", text],
             capture_output=True,
             text=True,
             timeout=10,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
-        print(f"[PLATFORM] wtype failed: {exc}", file=sys.stderr)
+        print(f"[PLATFORM] ydotool failed: {exc}", file=sys.stderr)
         return -1
     if proc.returncode != 0:
         print(
-            f"[PLATFORM] wtype rc={proc.returncode}: {proc.stderr.strip()}",
+            f"[PLATFORM] ydotool rc={proc.returncode}: {proc.stderr.strip()}",
             file=sys.stderr,
         )
     return proc.returncode
@@ -739,12 +780,23 @@ class ControlServer:
 
 
 def send_control(command: str, path: str | None = None, timeout: float = 10.0) -> str:
-    """Send one command to a running ControlServer and return its reply."""
+    """Send one command to a running ControlServer and return its reply.
+
+    Reads until EOF: the server closes the connection after replying, so a
+    single recv() would truncate long replies (the history listing is
+    longer than one packet).
+    """
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
         sock.settimeout(timeout)
         sock.connect(path or socket_path())
         sock.sendall(command.encode("utf-8"))
-        return sock.recv(256).decode("utf-8", "replace").strip()
+        chunks: list[bytes] = []
+        while True:
+            data = sock.recv(4096)
+            if not data:
+                break
+            chunks.append(data)
+        return b"".join(chunks).decode("utf-8", "replace").strip()
 
 
 def main(argv: list[str] | None = None) -> int:

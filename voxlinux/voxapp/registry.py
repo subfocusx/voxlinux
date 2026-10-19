@@ -157,10 +157,16 @@ def model_dir(model_id: str) -> str:
 
 
 def is_installed(model_id: str) -> bool:
-    """A model is installed if its extracted_dir exists on disk."""
+    """A model is installed only when every file in its `files` dict exists."""
     if model_id not in MODELS:
         return False
-    return os.path.isdir(model_dir(model_id))
+    base = model_dir(model_id)
+    if not os.path.isdir(base):
+        return False
+    return all(
+        os.path.isfile(os.path.join(base, rel))
+        for rel in MODELS[model_id]["files"].values()
+    )
 
 
 def resolved_files(model_id: str) -> dict[str, str]:

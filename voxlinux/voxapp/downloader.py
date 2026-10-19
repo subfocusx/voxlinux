@@ -58,7 +58,7 @@ def _extract(
             tar_members = tf.getmembers()
             total = len(tar_members)
             for i, tm in enumerate(tar_members):
-                tf.extract(tm, dest_dir)
+                tf.extract(tm, dest_dir, filter="data")
                 on_progress(i + 1, total, "Распаковка")
     else:
         raise ValueError(f"Unknown archive format: {archive_format}")

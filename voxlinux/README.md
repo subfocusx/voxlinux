@@ -117,6 +117,24 @@ ONNX Runtime с «5000 by 5500». Длинные диктовки режутся
 `~/.local/share/voxlinux/models/`); иначе первое распознавание завершится
 ошибкой.
 
+## Бенчмарк
+
+`scripts/bench_models.py` меряет модели на размеченном наборе (27 реплик из
+Golos crowd validation + локальные сэмплы) и печатает WER/CER (сырые и
+нормализованные) и RTF.
+
+```bash
+./.venv/bin/python scripts/bench_models.py eval/data --model gigaam-v3-e2e-rnnt-punct
+./.venv/bin/python eval/fetch_dataset.py --check   # сверка датасета по SHA-256
+```
+
+Наш замер (2026-10-20): norm WER 5.06 % у e2e RNN-T punct, 8.23 % у e2e CTC
+punct, 2.53 % у legacy plain CTC — то есть нативная пунктуация стоит ~2.5 п. п.
+WER, а внутри punct-семейства RNN-T точнее CTC. Подробности, нормализация и
+лицензия датасета — в `eval/RESULTS.md`.
+
+---
+
 ## Требования
 
 * Linux с **Wayland** (проверено на Hyprland 0.56, Lua-конфиг, Omarchy)
@@ -124,6 +142,11 @@ ONNX Runtime с «5000 by 5500». Длинные диктовки режутся
 * Внешние утилиты: `wtype` (вставка текста), `notify-send` (статус),
   `paplay` (бипы), `hyprctl` (опрос состояния клавиш)
 * Микрофон, доступный PipeWire/PulseAudio
+
+Вставка текста идёт тремя путями: `wl-copy` + `wtype` (буфер обмена и
+атомарная вставка, основной путь), прямой `wtype`, затем `ydotool` — последнему
+нужен запущенный демон (`sudo ydotool daemon`), он же требует, чтобы сокет
+лежал в `YDOOTOOL_SOCKET` или `/tmp/.ydotool_socket`.
 
 `./install.sh --check` проверяет всё это и печатает отчёт.
 
@@ -227,6 +250,12 @@ sudo usermod -aG input $USER    # затем перелогиниться
 | `vox-ptt toggle` | переключить запись |
 | `vox-ptt hold Right` | запись, пока клавиша нажата (останавливается сам) |
 | `vox-ptt ping` | проверить, что воркер жив |
+| `vox-ptt history [N]` | последние N диктовок (по умолчанию 10) |
+| `vox-ptt stats` | счётчики: всего диктовок, словарь, использование моделей |
+
+История пишется в SQLite (`~/.local/share/voxlinux/vox_data.db`) после
+каждой успешно вставленной реплики; ошибка записи никогда не ломает
+диктовку.
 
 ---
 
@@ -284,7 +313,7 @@ control-сокет), движок sherpa-onnx с GigaAM v3 (CTC/RNN-T, в т.ч.
 `voxapp/daemon.py` (запись → GigaAM → постобработка → вставка через wtype),
 запускается как systemd user service `voxlinux`.
 
-План работ — `../PLAN.md`.
+План работ — `PLAN.md` (рядом с этим файлом).
 
 ---
 

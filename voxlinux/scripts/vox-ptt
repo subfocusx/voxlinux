@@ -21,7 +21,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from voxapp import platform_linux as plat  # noqa: E402
 
-USAGE = "usage: vox-ptt {start|stop|toggle|hold [KEY]|ping}"
+USAGE = "usage: vox-ptt {start|stop|toggle|hold [KEY]|ping|history [N]|stats}"
 
 
 def main(argv: list[str]) -> int:

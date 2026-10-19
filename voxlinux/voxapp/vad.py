@@ -28,6 +28,113 @@ try:
 except ImportError:  # direct script run: python voxapp/vad.py
     from config import get_models_dir  # type: ignore[no-redef]
 
+
+def _spans_to_segments(spans, n, pad_samples, max_len) -> list[tuple[int, int]]:
+    """Pure post-processing of VAD spans into decode-safe segments.
+
+    Takes a list of ``(start, end)`` sample spans reported by the VAD back
+    end plus the buffer length ``n``, the padding (samples) applied to every
+    span and the maximum segment length (samples). Returns a list of
+    ``(start, end)`` slices into the original buffer.
+
+    Distinct spans stay distinct: when the padded ranges of two neighbours
+    overlap, only the overlapping padding of the *later* span is trimmed
+    (``start = previous_end``) instead of merging them into one block. A
+    single over-long span is then cut into ``max_len``-sized pieces.
+    """
+    try:
+        n = int(n)
+    except (TypeError, ValueError):
+        n = 0
+    if n < 0:
+        n = 0
+    try:
+        pad = int(pad_samples)
+    except (TypeError, ValueError):
+        pad = 0
+    if pad < 0:
+        pad = 0
+    try:
+        max_len = int(max_len)
+    except (TypeError, ValueError):
+        max_len = 0
+    if max_len < 0:
+        max_len = 0
+
+    # 1. Clamp every span to [0, n] BEFORE padding, drop empties, sort.
+    norm: list[tuple[int, int]] = []
+    if spans:
+        for item in spans:
+            try:
+                s, e = item
+            except (TypeError, ValueError):
+                continue
+            try:
+                s = int(s)
+                e = int(e)
+            except (TypeError, ValueError):
+                continue
+            if s < 0:
+                s = 0
+            if s > n:
+                s = n
+            if e < 0:
+                e = 0
+            if e > n:
+                e = n
+            if e <= s:
+                continue
+            norm.append((s, e))
+    norm.sort(key=lambda x: (x[0], x[1]))
+
+    # 2. Pad, trimming only the overlapping padding of a later span.
+    padded: list[tuple[int, int]] = []
+    for s, e in norm:
+        ps = s - pad
+        if ps < 0:
+            ps = 0
+        pe = e + pad
+        if pe > n:
+            pe = n
+        if pe <= ps:
+            continue
+        if padded and ps <= padded[-1][1]:
+            ps = padded[-1][1]
+            if ps < 0:
+                ps = 0
+            if ps > n:
+                ps = n
+            if pe <= ps:
+                continue
+            if pe > n:
+                pe = n
+            if pe <= ps:
+                continue
+        padded.append((ps, pe))
+
+    # 3. Split over-long spans into max_len pieces; track actual emitted end.
+    out: list[tuple[int, int]] = []
+    prev_end = 0
+    for start, end in padded:
+        if start < prev_end:
+            start = prev_end
+        if end <= start:
+            continue
+        cur = start
+        emitted = False
+        if max_len > 0:
+            while end - cur > max_len:
+                out.append((cur, cur + max_len))
+                cur += max_len
+                emitted = True
+        if end > cur:
+            out.append((cur, end))
+            emitted = True
+        if emitted and out:
+            if out[-1][1] > prev_end:
+                prev_end = out[-1][1]
+    return out
+
 VAD_MODEL_FILENAME = "silero_vad.onnx"
 VAD_MODEL_URL = (
     "https://github.com/k2-fsa/sherpa-onnx/releases/download/"
@@ -73,6 +180,10 @@ class SpeechSegmenter:
         # couple of windows early, which clipped word onsets ("ничьих" came
         # out as "чьих"). Pad every span to restore the consonants.
         self.pad_samples = int(pad_ms * sample_rate / 1000.0)
+
+    @staticmethod
+    def _spans_to_segments(spans, n, pad_samples, max_len):
+        return _spans_to_segments(spans, n, pad_samples, max_len)
 
     def split(self, pcm_int16: np.ndarray) -> list[np.ndarray]:
         """Split int16 PCM into speech-only segments (int16, same sample rate).
@@ -141,39 +252,16 @@ class SpeechSegmenter:
             return []
 
         n = int(pcm.size)
-        # Clip to the input range, drop empties, keep original order,
-        # and de-overlap defensively (VAD spans should not overlap).
-        spans.sort(key=lambda s: s[0])
+        max_len = int(self.max_speech_seconds * self.sample_rate)
 
-        # Pad every span and merge the ones that now touch: the padding
-        # would otherwise make neighbours overlap, and decoding the same
-        # audio twice would duplicate text.
-        padded: list[tuple[int, int]] = []
-        for start, end in spans:
-            s = max(0, start - self.pad_samples)
-            e = min(n, end + self.pad_samples)
-            if e <= s:
-                continue
-            if padded and s <= padded[-1][1]:
-                padded[-1] = (padded[-1][0], max(padded[-1][1], e))
-            else:
-                padded.append((s, e))
+        # Pure span post-processing (padded, de-overlapped, length-capped).
+        segments = _spans_to_segments(spans, n, self.pad_samples, max_len)
 
         out: list[np.ndarray] = []
-        prev_end = 0
-        max_len = int(self.max_speech_seconds * self.sample_rate)
-        for start, end in padded:
-            start = max(start, prev_end)
+        for start, end in segments:
             if end <= start:
                 continue
-            # Safety net: enforce the length cap even if the VAD back end
-            # ever returns a longer span.
-            while end - start > max_len and max_len > 0:
-                out.append(np.ascontiguousarray(pcm[start : start + max_len]))
-                start += max_len
-            if end > start:
-                out.append(np.ascontiguousarray(pcm[start:end]))
-            prev_end = end
+            out.append(np.ascontiguousarray(pcm[start:end]))
         return out
 
 
@@ -216,7 +304,7 @@ def download_vad_model(
         on_log(f"[VAD] Installed: {dest}")
         on_progress(1, 1, "Готово")
         return dest
-    except BaseException:
+    except Exception:
         with contextlib.suppress(OSError):
             os.remove(tmp_path)
         raise

@@ -175,6 +175,8 @@ class SherpaEngine(Engine):
 
     def transcribe(self, pcm_int16: np.ndarray, trim: bool = True,
                    normalize: bool = True) -> str:
+        if pcm_int16 is None or np.asarray(pcm_int16).size == 0:
+            return ""
         samples = preprocessing.prepare(pcm_int16, SAMPLE_RATE, trim=trim,
                                         normalize=normalize)
         if samples.size == 0:
@@ -182,7 +184,16 @@ class SherpaEngine(Engine):
 
         duration = samples.size / SAMPLE_RATE
 
+        # Short captures decode in one shot. They are trivially under the
+        # model's per-decode ceiling (CHUNK_THRESHOLD_SECONDS << MAX_DECODE_SECONDS),
+        # but the same guard is applied so there is a single authoritative
+        # check before any decode happens.
         if duration <= CHUNK_THRESHOLD_SECONDS:
+            if duration > MAX_DECODE_SECONDS:
+                raise ValueError(
+                    f"audio is {duration:.1f}s, the limit is "
+                    f"{MAX_DECODE_SECONDS:.0f}s"
+                )
             return self._decode(samples)
 
         # Longer than one chunk: split into speech segments and decode them
@@ -190,13 +201,15 @@ class SherpaEngine(Engine):
         # ~200 s limit (a single decode of 201 s crashes ONNX Runtime).
         chunks = self._segments(samples)
         if not chunks:
-            if duration > MAX_DECODE_SECONDS:
-                raise ValueError(
-                    f"audio is {duration:.1f}s, the limit is {MAX_DECODE_SECONDS:.0f}s; "
-                    "reduce the recording length"
-                )
-            return self._decode(samples)
+            # Defensive: _segments() never returns [] for non-empty input, but
+            # if it ever does, fall back to fixed windows instead of decoding
+            # the whole capture at once.
+            step = int(FALLBACK_CHUNK_SECONDS * SAMPLE_RATE)
+            chunks = [samples[i : i + step]
+                      for i in range(0, len(samples), step)] or [samples]
 
+        # Single authoritative length check: every chunk must fit the model's
+        # per-decode limit before any decoding starts.
         for chunk in chunks:
             chunk_seconds = chunk.size / SAMPLE_RATE
             if chunk_seconds > MAX_DECODE_SECONDS:
