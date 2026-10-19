@@ -164,9 +164,10 @@ cd voxlinux
 
 1. создаёт `./.venv` и ставит туда `requirements.txt`
    (`sherpa-onnx`, `sounddevice`, `numpy`);
-2. кладёт в `~/.local/bin` лаунчеры `vox-ptt` и `voxlinux`;
-3. рендерит `systemd/voxlinux.service` в
-   `~/.config/systemd/user/voxlinux.service` и включает сервис;
+2. кладёт в `~/.local/bin` лаунчеры `vox-ptt`, `voxlinux` и `voxtray`
+   (трей запускается системным python с PyGObject — не venv);
+3. рендерит `systemd/voxlinux.service` и `systemd/voxtray.service` в
+   `~/.config/systemd/user/` и включает сервисы;
 4. скачивает модель по умолчанию GigaAM v3 e2e RNN-T punct (~162 МБ) и
    Silero VAD (~640 КБ) в `~/.local/share/voxlinux/models/`;
 5. печатает готовый бинд для Hyprland.
@@ -185,6 +186,7 @@ echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc && source ~/.zshrc
 | `--deps` | доустановить системные пакеты через `sudo` (pacman) |
 | `--model[=ID]` / `--no-model` | скачать модель (по умолчанию из реестра) или пропустить; `--model=<id>` — конкретный вариант |
 | `--no-vad` | пропустить скачивание Silero VAD (опционально) |
+| `--no-tray` | пропустить установку опционального трея `voxtray` (нужен системный python с PyGObject) |
 | `--input-group` | `sudo usermod -aG input $USER` — хоткей без биндов |
 | `--udev-rule PATH` | udev-правило `uaccess` для конкретной клавиатуры |
 | `--skip-service` | не ставить systemd-юнит |

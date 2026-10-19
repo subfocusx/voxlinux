@@ -19,6 +19,7 @@ import json
 import os
 import socket
 import subprocess
+import sys
 
 import gi  # noqa: E402
 
@@ -41,7 +42,16 @@ def send_control(command: str, timeout: float = 5.0) -> str:
         sock.settimeout(timeout)
         sock.connect(socket_path())
         sock.sendall(command.encode("utf-8"))
-        return sock.recv(256).decode("utf-8", "replace").strip()
+        # The server closes the connection after replying, so reading until
+        # EOF is correct and does not hang (a single recv() truncates long
+        # replies such as the history listing).
+        chunks = []
+        while True:
+            data = sock.recv(4096)
+            if not data:
+                break
+            chunks.append(data)
+        return b"".join(chunks).decode("utf-8", "replace").strip()
 
 
 def model_name() -> str:
@@ -132,6 +142,10 @@ class Tray:
 
 
 def main() -> int:
+    if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        print("voxtray: no display available (DISPLAY/WAYLAND_DISPLAY unset) — exiting",
+              file=sys.stderr)
+        return 1
     Tray()
     Gtk.main()
     return 0

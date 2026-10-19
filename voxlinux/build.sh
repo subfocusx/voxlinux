@@ -183,6 +183,14 @@ if (( PYINSTALLER_OK == 1 )); then
         ok "copied rec_overlay.py (frozen=False)"
     fi
 
+    # voxtray as plain script — it needs the SYSTEM python (PyGObject), so it
+    # must not be frozen; the bundle launcher calls it with /usr/bin/python3.
+    if [[ -f "$SRC_DIR/scripts/voxtray" ]]; then
+        cp "$SRC_DIR/scripts/voxtray" "$BUNDLE_DIR/voxtray"
+        chmod +x "$BUNDLE_DIR/voxtray"
+        ok "copied voxtray (frozen=False)"
+    fi
+
     # systemd templates rendered
     mkdir -p "$BUNDLE_DIR/systemd"
     for u in voxlinux.service voxtray.service; do
@@ -214,16 +222,35 @@ exec "$BUNDLE_DIR/vox-ptt" "\$@"
 EOF
 chmod +x "$BIN_DIR/vox-ptt"
 
+# Tray icon: needs the SYSTEM python with PyGObject, so it is not frozen.
+if [[ -f "$BUNDLE_DIR/voxtray" ]]; then
+    SYS_PY="/usr/bin/python3"
+    [[ -x "$SYS_PY" ]] || SYS_PY="$(command -v python3 || echo /usr/bin/python3)"
+    cat > "$BIN_DIR/voxtray" <<EOF
+#!/usr/bin/env bash
+exec "$SYS_PY" "$BUNDLE_DIR/voxtray" "\$@"
+EOF
+    chmod +x "$BIN_DIR/voxtray"
+fi
+
 # render + install systemd user unit
 if [[ -f "$BUNDLE_DIR/systemd/voxlinux.service" ]]; then
     sed -e "s|%h|$HOME|g" -e "s|%t|${XDG_RUNTIME_DIR:-/run/user/$(id -u)}|g" \
         "$BUNDLE_DIR/systemd/voxlinux.service" > "$UNIT_DIR/voxlinux.service"
 fi
+if [[ -f "$BUNDLE_DIR/systemd/voxtray.service" ]]; then
+    sed -e "s|%h|$HOME|g" -e "s|%t|${XDG_RUNTIME_DIR:-/run/user/$(id -u)}|g" \
+        "$BUNDLE_DIR/systemd/voxtray.service" > "$UNIT_DIR/voxtray.service"
+fi
 if command -v systemctl >/dev/null 2>&1; then
     systemctl --user daemon-reload 2>/dev/null || true
+    systemctl --user enable voxlinux.service 2>/dev/null || true
+    if [[ -f "$UNIT_DIR/voxtray.service" ]]; then
+        systemctl --user enable voxtray.service 2>/dev/null || true
+    fi
 fi
 echo "Installed VoxLinux bundle from $BUNDLE_DIR"
-echo "  launchers: $BIN_DIR/voxlinux, $BIN_DIR/vox-ptt"
+echo "  launchers: $BIN_DIR/voxlinux, $BIN_DIR/vox-ptt, $BIN_DIR/voxtray"
 echo "  unit:      $UNIT_DIR/voxlinux.service"
 echo "Enable with: systemctl --user enable --now voxlinux.service"
 INSTALL_EOF
